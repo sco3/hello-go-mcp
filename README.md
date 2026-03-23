@@ -4,58 +4,45 @@ A Go-based MCP (Model Context Protocol) server implementation.
 
 ## Benchmarks
 
-### API Benchmark (oha)
+### Side-by-Side Comparison
 
-Endpoint: `http://localhost:7881/api/hello?name=Asdf`
+| Metric | MCP Benchmark | oha API Benchmark |
+|--------|---------------|-------------------|
+| **Endpoint** | `http://localhost:7881/mcp` | `http://localhost:7881/api/hello?name=Asdf` |
+| **Total requests** | 1,250,000 | 1,000 |
+| **Concurrent connections/users** | 125 | 125 |
+| **Success rate** | 100% | 100.00% |
+| **Throughput (req/sec)** | 22,440.76 | 49,956.82 |
+| **Average latency** | 5.52 ms | 1.4 ms |
+| **Total time** | 55,702.21 ms (~55.7 secs) | 0.0200 secs |
 
-**Configuration:**
-- Concurrent connections: 125
-- Total requests: 1000
+**Latency Distribution:**
 
-**Results:**
-| Metric | Value |
-|--------|-------|
-| Success rate | 100.00% |
-| Total time | 0.0200 secs |
-| Requests/sec | 49,956.82 |
-| Average latency | 1.4 ms |
-| Fastest | 0.0 ms |
-| Slowest | 12.8 ms |
-
-**Response Time Distribution:**
-| Percentile | Latency |
-|------------|---------|
-| p50 | 0.4 ms |
-| p75 | 0.9 ms |
-| p90 | 2.5 ms |
-| p95 | 11.8 ms |
-| p99 | 12.5 ms |
-| p99.9 | 12.8 ms |
-
-**Status Codes:** 100% HTTP 200
+| Percentile | MCP Benchmark | oha API Benchmark |
+|------------|---------------|-------------------|
+| p50 | — | 0.4 ms |
+| p75 | — | 0.9 ms |
+| p90 | — | 2.5 ms |
+| p95 | — | 11.8 ms |
+| p99 | — | 12.5 ms |
+| p99.9 | — | 12.8 ms |
+| Fastest | — | 0.0 ms |
+| Slowest | — | 12.8 ms |
 
 ---
 
 ### MCP Benchmark (Native)
 
-Endpoint: `http://localhost:7881/mcp`
-
 **Configuration:**
 - Transport: Streamable HTTP (SSE is deprecated)
 - Method: Initialize once, call hello repeatedly
-- Concurrent users: 125
-- Requests per user: 10,000
-- Total requests: 1,250,000
 - Tool: hello
 
-**Results:**
-| Metric | Value |
-|--------|-------|
-| Total requests | 1,250,000 |
-| Success rate | 100% |
-| Elapsed time | 55,702.21 ms (~55.7 secs) |
-| Throughput | 22,440.76 req/s |
-| Average latency | 5.52 ms |
+---
+
+### API Benchmark (oha)
+
+**Status Codes:** 100% HTTP 200
 
 ---
 
