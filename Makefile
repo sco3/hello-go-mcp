@@ -11,7 +11,7 @@ test:
 	./scripts/test-with-curl.sh
 
 api-bench:
-	oha --disable-color -c 125 -n 1000 http://localhost:7881/api/hello?name=Asdf
+	oha --disable-color -c 125 -n 1250000 http://localhost:7881/api/hello?name=Asdf
 
 SERVER_URL ?= http://localhost:7881/mcp
 USERS ?= 125

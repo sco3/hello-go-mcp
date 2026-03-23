@@ -9,25 +9,26 @@ A Go-based MCP (Model Context Protocol) server implementation.
 | Metric | MCP Benchmark | oha API Benchmark |
 |--------|---------------|-------------------|
 | **Endpoint** | `http://localhost:7881/mcp` | `http://localhost:7881/api/hello?name=Asdf` |
-| **Total requests** | 1,250,000 | 1,000 |
+| **Total requests** | 1,250,000 | 1,250,000 |
 | **Concurrent connections/users** | 125 | 125 |
 | **Success rate** | 100% | 100.00% |
-| **Throughput (req/sec)** | 22,440.76 | 49,956.82 |
-| **Average latency** | 5.52 ms | 1.4 ms |
-| **Total time** | 55,702.21 ms (~55.7 secs) | 0.0200 secs |
+| **Throughput (req/sec)** | 22,440.76 | 242,827.61 |
+| **Average latency** | 5.52 ms | 0.5 ms |
+| **Total time** | 55,702.21 ms (~55.7 secs) | 5.1477 secs |
 
 **Latency Distribution:**
 
 | Percentile | MCP Benchmark | oha API Benchmark |
 |------------|---------------|-------------------|
-| p50 | — | 0.4 ms |
-| p75 | — | 0.9 ms |
-| p90 | — | 2.5 ms |
-| p95 | — | 11.8 ms |
-| p99 | — | 12.5 ms |
-| p99.9 | — | 12.8 ms |
+| p50 | — | 0.3 ms |
+| p75 | — | 0.6 ms |
+| p90 | — | 1.2 ms |
+| p95 | — | 1.6 ms |
+| p99 | — | 2.5 ms |
+| p99.9 | — | 4.3 ms |
+| p99.99 | — | 6.9 ms |
 | Fastest | — | 0.0 ms |
-| Slowest | — | 12.8 ms |
+| Slowest | — | 15.5 ms |
 
 ---
 
