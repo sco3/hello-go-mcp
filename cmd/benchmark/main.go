@@ -1,0 +1,376 @@
+// MCP Streamable HTTP Benchmark
+// Compares requests per second: Direct vs Gateway
+// Uses mcp-go-sdk with Streamable HTTP transport
+//
+// Proper session management:
+// - Initialize session once per client
+// - Reuse session for all tool calls
+// - Measures actual tool call throughput
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// verifyToolExists checks if the specified tool exists on the server
+func verifyToolExists(baseURL string, toolName string) error {
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "benchmark-client",
+		Version: "1.0.0",
+	}, nil)
+
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: baseURL,
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to server: %w", err)
+	}
+	defer session.Close()
+
+	toolsResult, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to list tools: %w", err)
+	}
+
+	toolNames := make([]string, 0, len(toolsResult.Tools))
+	for _, tool := range toolsResult.Tools {
+		toolNames = append(toolNames, tool.Name)
+	}
+
+	for _, name := range toolNames {
+		if name == toolName {
+			return nil
+		}
+	}
+
+	fmt.Fprintf(log.Writer(), "\nTool '%s' not found on server\n", toolName)
+	fmt.Fprintf(log.Writer(), "\nAvailable tools:\n")
+	for _, name := range toolNames {
+		fmt.Fprintf(log.Writer(), "  - %s\n", name)
+	}
+	return fmt.Errorf("tool '%s' not found", toolName)
+}
+
+func findSlash(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			return i
+		}
+	}
+	return -1
+}
+
+// hasSuffix checks if s ends with suffix (simple implementation to avoid strings package)
+func hasSuffix(s, suffix string) bool {
+	if len(suffix) > len(s) {
+		return false
+	}
+	return s[len(s)-len(suffix):] == suffix
+}
+
+// containsErrorPattern checks if a response text contains common error patterns
+func containsErrorPattern(text string) bool {
+	textLower := toLower(text)
+	errorPatterns := []string{
+		"error:",
+		"error getting",
+		"error:",
+		"failed to",
+		"outside sandbox",
+		"permission denied",
+		"not found",
+		"invalid",
+	}
+	for _, pattern := range errorPatterns {
+		if contains(textLower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func toLower(s string) string {
+	var result []byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c = c + ('a' - 'A')
+		}
+		result = append(result, c)
+	}
+	return string(result)
+}
+
+// parseJSON parses a JSON string into a map
+func parseJSON(data string, result *map[string]any) error {
+	// Simple JSON object parser
+	data = strings.TrimSpace(data)
+	if len(data) < 2 || data[0] != '{' || data[len(data)-1] != '}' {
+		return fmt.Errorf("invalid JSON object")
+	}
+
+	*result = make(map[string]any)
+	data = data[1 : len(data)-1] // Remove outer braces
+
+	if strings.TrimSpace(data) == "" {
+		return nil
+	}
+
+	// Use encoding/json for proper parsing
+	return json.Unmarshal([]byte(data), result)
+}
+
+// BenchmarkStats holds statistics for benchmark runs
+type BenchmarkStats struct {
+	TotalRequests      int
+	SuccessfulRequests int
+	FailedRequests     int
+	TotalLatency       time.Duration
+	Elapsed            time.Duration
+}
+
+// BenchmarkConfig holds configuration for a benchmark run
+type BenchmarkConfig struct {
+	Name              string
+	BaseURL           string
+	ConcurrentClients int
+	RequestsPerClient int
+	ToolName          string
+	ToolArguments     map[string]any
+}
+
+// runBenchmark runs the benchmark with the given configuration
+func runBenchmark(config BenchmarkConfig) BenchmarkStats {
+	var (
+		stats     BenchmarkStats
+		statsMu   sync.Mutex
+		wg        sync.WaitGroup
+		startTime = time.Now()
+	)
+
+	fmt.Printf(
+		"\nStarting benchmark: %s (%d clients x %d requests = %d total)\n",
+		config.Name,
+		config.ConcurrentClients,
+		config.RequestsPerClient,
+		config.ConcurrentClients*config.RequestsPerClient,
+	)
+	fmt.Printf("   Tool: %s\n", config.ToolName)
+	if config.ToolArguments != nil && len(config.ToolArguments) > 0 {
+		argsJSON, _ := json.Marshal(config.ToolArguments)
+		fmt.Printf("   Arguments: %s\n", string(argsJSON))
+	}
+
+	for clientID := 0; clientID < config.ConcurrentClients; clientID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			clientStats := benchmarkClient(id, config.BaseURL, config.RequestsPerClient, config.ToolName, config.ToolArguments)
+
+			statsMu.Lock()
+			stats.TotalRequests += clientStats.TotalRequests
+			stats.SuccessfulRequests += clientStats.SuccessfulRequests
+			stats.FailedRequests += clientStats.FailedRequests
+			stats.TotalLatency += clientStats.TotalLatency
+			statsMu.Unlock()
+		}(clientID)
+	}
+
+	// Wait for all tasks to complete
+	wg.Wait()
+
+	elapsed := time.Since(startTime)
+	avgLatencyMs := float64(0)
+	if stats.SuccessfulRequests > 0 {
+		avgLatencyMs = float64(stats.TotalLatency) / float64(stats.SuccessfulRequests) / float64(time.Millisecond)
+	}
+	throughput := float64(stats.SuccessfulRequests) / elapsed.Seconds()
+
+	fmt.Printf("\n%s Results:\n", config.Name)
+	fmt.Printf("   Total: %d requests (%d success, %d failed)\n",
+		stats.TotalRequests, stats.SuccessfulRequests, stats.FailedRequests)
+	fmt.Printf("   Elapsed: %.2fms\n", float64(elapsed)/float64(time.Millisecond))
+	fmt.Printf("   Avg latency: %.2fms\n", avgLatencyMs)
+	fmt.Printf("   Throughput: %.2f req/s\n", throughput)
+
+	return BenchmarkStats{
+		TotalRequests:      stats.TotalRequests,
+		SuccessfulRequests: stats.SuccessfulRequests,
+		FailedRequests:     stats.FailedRequests,
+		TotalLatency:       stats.TotalLatency,
+		Elapsed:            elapsed,
+	}
+}
+
+// benchmarkClient runs benchmark for a single client
+func benchmarkClient(clientID int, baseURL string, numRequests int, toolName string, toolArgs map[string]any) BenchmarkStats {
+	var stats BenchmarkStats
+	// Use the URL exactly as specified in the config
+	httpURL := baseURL
+
+	// Step 1: Initialize session ONCE per client
+	client := mcp.NewClient(&mcp.Implementation{
+		Name:    "benchmark-client",
+		Version: "1.0.0",
+	}, nil)
+
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint: httpURL,
+	}, nil)
+	if err != nil {
+		log.Printf("   Client %d failed to initialize: %v", clientID, err)
+		stats.FailedRequests = numRequests
+		stats.TotalRequests = numRequests
+		return stats
+	}
+	defer session.Close()
+
+	// Step 2: Reuse session for all tool calls
+	for i := 0; i < numRequests; i++ {
+		start := time.Now()
+
+		// Call specified tool with arguments
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      toolName,
+			Arguments: toolArgs,
+		})
+
+		latency := time.Since(start)
+		stats.TotalLatency += latency
+		stats.TotalRequests++
+
+		if err != nil {
+			stats.FailedRequests++
+			if i == 0 {
+				log.Printf("   Client %d error: %v", clientID, err)
+			}
+			continue
+		}
+
+		// Check if the tool call returned an error (IsError flag or error content)
+		isToolError := result.IsError
+		errorMsg := ""
+
+		// Also check if content contains error message (some servers don't set IsError)
+		if !isToolError && len(result.Content) > 0 {
+			if textContent, ok := result.Content[0].(*mcp.TextContent); ok {
+				errorMsg = textContent.Text
+				// Check for common error patterns in the response text
+				if containsErrorPattern(errorMsg) {
+					isToolError = true
+				}
+			}
+		}
+
+		if isToolError {
+			stats.FailedRequests++
+			if i == 0 {
+				if errorMsg == "" {
+					errorMsg = "Tool call failed"
+				}
+				log.Printf("   Client %d tool error: %s", clientID, errorMsg)
+			}
+			continue
+		}
+
+		if len(result.Content) > 0 {
+			stats.SuccessfulRequests++
+		} else {
+			stats.FailedRequests++
+			if i == 0 {
+				log.Printf("   Client %d error: Empty response", clientID)
+			}
+		}
+	}
+
+	return stats
+}
+
+func main() {
+	// CLI parameters
+	users := flag.Int("u", 125, "Number of concurrent clients")
+	requestsPerUser := flag.Int("r", 10000, "Number of requests per client")
+	serverURL := flag.String("s", "", "Server URL for benchmark")
+	toolName := flag.String("t", "get_system_time", "Tool name to call for benchmark")
+	toolArgs := flag.String("a", "", "Tool arguments as JSON string")
+	flag.Parse()
+
+	// Parse tool arguments JSON
+	var argsMap map[string]any
+	if *toolArgs != "" {
+		if err := parseJSON(*toolArgs, &argsMap); err != nil {
+			log.Fatalf("Error parsing tool arguments: %v", err)
+		}
+	}
+
+	concurrentClients := *users
+	requestsPerClient := *requestsPerUser
+
+	if *serverURL == "" {
+		log.Fatal("Error: -s is required")
+	}
+
+	fmt.Println("MCP Streamable HTTP Benchmark")
+	fmt.Println("   Transport: Streamable HTTP (SSE is deprecated)")
+	fmt.Println("   Method: Initialize once, call", *toolName, "repeatedly")
+	fmt.Printf("   Users: %d, Requests per user: %d\n", concurrentClients, requestsPerClient)
+	fmt.Printf("   Server URL: %s\n", *serverURL)
+
+	// Direct connection benchmark
+	directURL := *serverURL
+	fmt.Printf("\n   Direct URL: %s\n", directURL)
+
+	// Verify tool exists on server
+	fmt.Printf("   Verifying tool '%s' exists...\n", *toolName)
+	if err := verifyToolExists(directURL, *toolName); err != nil {
+		log.Fatalf("%v", err)
+	}
+	fmt.Printf("   Tool '%s' found\n", *toolName)
+
+	directStats := runBenchmark(BenchmarkConfig{
+		Name:              "Direct",
+		BaseURL:           directURL,
+		ConcurrentClients: concurrentClients,
+		RequestsPerClient: requestsPerClient,
+		ToolName:          *toolName,
+		ToolArguments:     argsMap,
+	})
+
+	// Summary
+	fmt.Println("\n" + string(make([]byte, 60)))
+	fmt.Println("SUMMARY")
+	fmt.Println(string(make([]byte, 60)))
+
+	directLatency := float64(1.0)
+	if directStats.SuccessfulRequests > 0 {
+		directLatency = float64(directStats.TotalLatency) / float64(directStats.SuccessfulRequests)
+	}
+
+	directThroughput := float64(directStats.SuccessfulRequests) / directStats.Elapsed.Seconds()
+
+	fmt.Printf(
+		"Direct:  %.2f req/s (avg %.2fms, %d%% success)\n",
+		directThroughput,
+		directLatency/float64(time.Millisecond),
+		directStats.SuccessfulRequests*100/max(1, directStats.TotalRequests),
+	)
+}
